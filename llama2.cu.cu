@@ -394,11 +394,20 @@ __global__ void MultiHeadAttention_kernel(half * __restrict__ output, const half
     __syncthreads();
 
     // weighted sum of the values, store back into xb
+    half* xb = output + h * head_size;
     for (int i = threadIdx.x; i < head_size; i += blockDim.x) {
-        float val = 0.0f;
-        for (int t = 0; t < seq_len; t++)
-            val += att[t] * (float)value_cache[loff + t * dim + h * head_size + i];
-        output[h * head_size + i] = (half) val;
+        xb[i] = (half)0;
+    }
+    __syncthreads();
+    for (int t = threadIdx.x; t < seq_len; t+= blockDim.x) {
+        // get the value vector for this head and at this timestep
+        const half* v = value_cache + loff + t * dim + h * head_size;
+        // get the attention weight for this timestep
+        float a = att[t];
+        // accumulate the weighted value into the output
+        for (int i = 0; i < head_size; i++) {
+            xb[i] += (half)(a * (float)v[i]);
+        }
     }
 }
 
