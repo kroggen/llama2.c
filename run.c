@@ -618,7 +618,10 @@ int main(int argc, char *argv[]) {
         size_t weights_size = file_size - sizeof(Config);
 
         // allocate memory for the weights, page aligned for best performance
-        data = (float*) aligned_alloc(sysconf(_SC_PAGESIZE), weights_size);
+        int pagesize = sysconf(_SC_PAGESIZE);
+        int pages_required = (weights_size + pagesize - 1) / pagesize;
+        int alloc_size = pages_required * pagesize;
+        data = (float*) aligned_alloc(sysconf(_SC_PAGESIZE), alloc_size);
         if (!data) { fprintf(stderr, "aligned_alloc failed!\n"); return 1; }
 
         // Read the weights into the allocated memory
