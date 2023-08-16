@@ -49,6 +49,16 @@ runompgnu:
 cuda-q8:
 	nvcc -O3 llama2-q8.cu -o llama2-q8 -Xcudafe --diag_suppress=2464
 
+# run all tests
+.PHONY: test
+test:
+	pytest
+
+# run only tests for run.c C implementation (is a bit faster if only C code changed)
+.PHONY: testc
+testc:
+	pytest -k runc
+
 .PHONY: clean
 clean:
 	rm -f run llama2-q8
