@@ -45,6 +45,10 @@ rungnu:
 runompgnu:
 	$(CC) -Ofast -fopenmp -std=gnu11 run.c  -lm  -o run
 
+.PHONY: cuda-q8
+cuda-q8:
+	nvcc -O3 llama2-q8.cu -o llama2-q8 -Xcudafe --diag_suppress=2464
+
 .PHONY: clean
 clean:
-	rm -f run
+	rm -f run llama2-q8
