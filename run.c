@@ -9,10 +9,14 @@
 #include <fcntl.h>
 #if defined _WIN32
     #include "win.h"
+    #define aligned_alloc _aligned_alloc
+    #define aligned_free  _aligned_free
 #else
     #include <unistd.h>
     #include <sys/mman.h>
+    #define aligned_free  free
 #endif
+
 // ----------------------------------------------------------------------------
 // Transformer and RunState structs, and related memory management
 
@@ -620,8 +624,7 @@ int main(int argc, char *argv[]) {
         // allocate memory for the weights, page aligned for best performance
         int pagesize = sysconf(_SC_PAGESIZE);
         int pages_required = (weights_size + pagesize - 1) / pagesize;
-        int alloc_size = pages_required * pagesize;
-        data = (float*) aligned_alloc(sysconf(_SC_PAGESIZE), alloc_size);
+        data = (float*) aligned_alloc(pagesize, pages_required * pagesize);
         if (!data) { fprintf(stderr, "aligned_alloc failed!\n"); return 1; }
 
         // Read the weights into the allocated memory
@@ -741,6 +744,6 @@ int main(int argc, char *argv[]) {
     free(vocab);
     free(vocab_scores);
     if (prompt_tokens != NULL) free(prompt_tokens);
-    free(data);
+    aligned_free(data);
     return 0;
 }
