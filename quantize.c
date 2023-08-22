@@ -1,11 +1,13 @@
 /*
-Inference for Llama-2 Transformer model in pure C.
+Quantize a llama2.c model (in .bin format) to q8 quantized format.
 
-Example compile: (see README for more details)
-$ gcc -O3 -o run run.c -lm
+Compile: 
+$ gcc -O3 -o quantize quantize.c -lm
 
 Then run with:
-$ ./run
+$ ./quantize your/model.bin
+
+The quantized model will be in data.q8
 */
 
 #include <stdio.h>
@@ -136,16 +138,49 @@ void quantize_weights(FILE* file, float *weights, int n_layers, int layer_size, 
 
 }
 
+typedef uint16_t fp16_t;
+
+static inline fp16_t fp16_from_float(float value)
+{
+    fp16_t fp16;
+    uint32_t fp32 = *((uint32_t*)&value);
+    uint32_t mant = (fp32 & 0x007FFCFF);
+    int16_t exp = (int16_t)((fp32 & 0x7F800000) >> 23) - 127 + 15;
+
+    // Handle special cases
+    if (exp <= 0) { // Denormals and underflows
+        mant = (mant | 0x00800000) >> (1 - exp);
+        exp = 0;
+    } else if (exp >= 0x1F) { // Overflows and infinities
+        exp = 0x1F;
+        mant = 0;
+    }
+    
+    fp16  = (fp32 & 0x80000000)? 0x8000 : 0x0000;   // sign
+    fp16 |= ((exp << 10));
+    fp16 |= ((mant >> 13) & 0x03FF) ;
+
+    // Round up as it seems that it is what ARM processor does with __fp16
+    if (mant & 0x00001000) fp16++;
+
+    return fp16;
+}
+
 void write_weights(FILE* file, float *weights, int n_layers, int layer_size, char *name) {
     puts("------------------------");
     printf("%s layer_size=%d\n", name, layer_size);
-    printf("%d layer(s) - not quantized\n", n_layers);
-    fwrite(weights, sizeof(float), n_layers * layer_size, file);
+    printf("%d layer(s) - fp16 quantized\n", n_layers);
+
+    fp16_t fp16;
+    for (int k = 0; k < n_layers * layer_size ; k++) {
+       fp16 = fp16_from_float(weights[k]);
+       fwrite(&fp16,sizeof(fp16_t),1,file);
+    }
 }
 
 int convert_weights_q8(TransformerWeights *w, Config *p, int shared_weights){
 
-    FILE* file = fopen("data.bin", "wb");
+    FILE* file = fopen("data.q8", "wb");
     if (file == NULL) {
         perror("Error opening file");
         return 1;
@@ -247,7 +282,7 @@ int main(int argc, char *argv[]) {
         checkpoint_init_weights(&weights, &config, weights_ptr, shared_weights);
 
         int ret = convert_weights_q8(&weights, &config, shared_weights);
-        if (ret == 0) printf("model converted and saved to data.bin\n");
+        if (ret == 0) printf("model converted and saved to data.q8\n");
     }
     
     // memory and file handles cleanup
