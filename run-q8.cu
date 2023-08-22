@@ -535,12 +535,10 @@ int load_q8_weights(void *w, int size, FILE* f, void *scratchCPU) {
     return 0;
 }
 
-int load_weights(void *w, int elements, FILE* f, void *scratchCPU, void *scratchGPU) {
-    int count = fread(scratchCPU, sizeof(float), elements, f);
+int load_weights(void *w, int elements, FILE* f, void *scratchCPU) {
+    int count = fread(scratchCPU, sizeof(uint16_t), elements, f);
     if (count != elements) return 1;
-    // copy and convert fp32->fp16
-    cudaMemcpyAsync(scratchGPU, scratchCPU, sizeof(float) * elements, cudaMemcpyHostToDevice);
-    convert_fp32_to_fp16 <<< divUp(elements, 1024), 1024 >>> ((half*)w, (float*)scratchGPU, elements);
+    cudaMemcpyAsync(w, scratchCPU, sizeof(uint16_t) * elements, cudaMemcpyHostToDevice);
     return 0;
 }
 
@@ -553,8 +551,6 @@ int checkpoint_init_weights(TransformerWeights* w, Config* p, FILE* f, int share
     scratch_size = std::max((size_t)p->vocab_size * p->dim, scratch_size);
     scratch_size *= sizeof(float);
     void* scratchCPU = malloc(scratch_size);
-    void* scratchGPU = nullptr;
-    cudaMalloc(&scratchGPU, scratch_size);
 
     if (load_q8_weights(w->token_embedding_table, quant_size(1, p->vocab_size * p->dim), f, scratchCPU)) return 1;
     if (load_q8_weights(w->rms_att_weight, quant_size(p->n_layers, p->dim), f, scratchCPU)) return 1;
@@ -568,13 +564,12 @@ int checkpoint_init_weights(TransformerWeights* w, Config* p, FILE* f, int share
     if (load_q8_weights(w->w3, quant_size(p->n_layers, p->dim * p->hidden_dim), f, scratchCPU)) return 1;
     if (load_q8_weights(w->rms_final_weight, quant_size(1, p->dim), f, scratchCPU)) return 1;
 
-    if (load_weights(w->freq_cis_real, p->seq_len * head_size / 2, f, scratchCPU, scratchGPU)) return 1;
-    if (load_weights(w->freq_cis_imag, p->seq_len * head_size / 2, f, scratchCPU, scratchGPU)) return 1;
+    if (load_weights(w->freq_cis_real, p->seq_len * head_size / 2, f, scratchCPU)) return 1;
+    if (load_weights(w->freq_cis_imag, p->seq_len * head_size / 2, f, scratchCPU)) return 1;
 
     if (!shared_weights)
         if (load_q8_weights(w->wcls, quant_size(1, p->vocab_size * p->dim), f, scratchCPU)) return 1;
 
-    cudaFree(scratchGPU);
     free(scratchCPU);
     return 0;
 }
@@ -1072,7 +1067,8 @@ int main(int argc, char *argv[]) {
         pos++;
 
         // data-dependent terminating condition: the BOS (1) token delimits sequences
-        if (next == 1) { break; }
+        if (next == 1) { break; } // BOS
+        if (next == 2) { break; } // EOS
 
         // following BOS (1) token, sentencepiece decoder strips any leading whitespace (see PR #89)
         char *token_str = (token == 1 && vocab[next][0] == ' ') ? vocab[next]+1 : vocab[next];
