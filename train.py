@@ -244,6 +244,17 @@ if wandb_log and master_process:
     import wandb
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
+
+def grow_pattention_layers(model, to_add):
+    raw_model = model.module if ddp else model
+    for layer in raw_model.layers:
+        layer.attention.wq.grow_parameters(to_add)
+        layer.attention.wk.grow_parameters(to_add)
+        layer.attention.wv.grow_parameters(to_add)
+        layer.attention.wo.grow_parameters(to_add)
+        layer.feed_forward.ffn.grow_parameters(to_add)
+
+
 # training loop
 train_batch_iter = iter_batches(split="train")
 X, Y = next(train_batch_iter)  # fetch the very first batch
@@ -318,6 +329,30 @@ while True:
     scaler.update()
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
+
+    # Grow parameters every 30 steps if below max size
+    GROW_EVERY_N_STEPS = 30
+    GROW_PARAMS_BY = 32
+    if iter_num > 0 and iter_num % GROW_EVERY_N_STEPS == 0:
+        raw_model = model.module if ddp else model
+        current_params = raw_model.layers[0].attention.wq.key_param_tokens.shape[0]
+        if current_params < 1024:
+            # Store old optimizer state
+            old_state = optimizer.state_dict()
+
+            # Grow parameters
+            grow_pattention_layers(model, GROW_PARAMS_BY)
+
+            # Create new optimizer but load previous state
+            optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+
+            # Load old state for existing parameters
+            new_state = optimizer.state_dict()
+            new_state['state'] = old_state['state']  # Preserve momentum for existing params
+            optimizer.load_state_dict(new_state)
+
+            if scaler.is_enabled():
+                scaler = torch.cuda.amp.GradScaler(enabled=(dtype == "float16"))
 
     # timing and logging
     t1 = time.time()

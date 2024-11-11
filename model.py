@@ -22,7 +22,7 @@ class ModelArgs:
     norm_eps: float = 1e-5
     max_seq_len: int = 2048
     dropout: float = 0.0
-
+    num_initial_pattention_params: int = 128
 
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float):
@@ -36,6 +36,58 @@ class RMSNorm(torch.nn.Module):
     def forward(self, x):
         output = self._norm(x.float()).type_as(x)
         return output * self.weight
+
+
+def nonlinear_normalization(inputs, normalization_type, dim=-1):
+    if normalization_type == 'softmax':
+        outputs = F.softmax(inputs, dim=dim)
+    elif normalization_type == 'scaled_softmax':
+        scale = 1.0 / math.sqrt(inputs.shape[dim])
+        outputs = F.softmax(inputs * scale, dim=dim)
+    elif normalization_type == 'l1_norm':
+        norm = inputs.abs().sum(dim=dim, keepdim=True)
+        outputs = inputs / norm * math.sqrt(inputs.shape[dim])
+    elif normalization_type == 'l2_norm':
+        norm = (inputs ** 2).sum(dim=dim, keepdim=True).sqrt()
+        outputs = inputs / norm * math.sqrt(inputs.shape[dim])
+    elif normalization_type == 'gelu_l2_norm':
+        nonlinear_outputs = F.gelu(inputs)
+        norm = (nonlinear_outputs ** 2).sum(dim=dim, keepdim=True).sqrt()
+        outputs = nonlinear_outputs / norm * math.sqrt(inputs.shape[dim])
+    elif normalization_type == 'l2_norm_gelu':
+        norm = (inputs ** 2).sum(dim=dim, keepdim=True).sqrt()
+        norm_outputs = inputs / norm * math.sqrt(inputs.shape[dim])
+        outputs = F.gelu(norm_outputs)
+    else:
+        raise NotImplementedError
+    return outputs
+
+
+class Pattention(nn.Module):
+    def __init__(self, input_channels, output_channels, token_num, normalization_type):
+        super().__init__()
+        self.input_channels = input_channels
+        self.output_channels = output_channels
+        self.normalization_type = normalization_type
+        # Initialize parameters as nn.Parameter for proper tracking
+        self.key_param_tokens = nn.Parameter(torch.empty(token_num, input_channels).uniform_(-0.02, 0.02))
+        self.value_param_tokens = nn.Parameter(torch.empty(token_num, output_channels).uniform_(-0.02, 0.02))
+
+    def grow_parameters(self, num_to_add):
+        # Create new parameters with uniform initialization on the same device as existing parameters
+        device = self.key_param_tokens.device
+        new_keys = torch.empty(num_to_add, self.input_channels, device=device).uniform_(-0.02, 0.02)
+        new_values = torch.empty(num_to_add, self.output_channels, device=device).uniform_(-0.02, 0.02)
+
+        # Concatenate and create new nn.Parameters
+        self.key_param_tokens = nn.Parameter(torch.cat([self.key_param_tokens, new_keys], dim=0))
+        self.value_param_tokens = nn.Parameter(torch.cat([self.value_param_tokens, new_values], dim=0))
+
+    def forward(self, inputs):
+        attn_weights = inputs @ self.key_param_tokens.t()
+        attn_weights = nonlinear_normalization(attn_weights, self.normalization_type)
+        output = attn_weights @ self.value_param_tokens
+        return output
 
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
@@ -101,12 +153,10 @@ class Attention(nn.Module):
         self.n_local_kv_heads = self.n_kv_heads // model_parallel_size
         self.n_rep = self.n_local_heads // self.n_local_kv_heads
         self.head_dim = args.dim // args.n_heads
-        self.wq = nn.Linear(args.dim, args.n_heads * self.head_dim, bias=False)
-        self.wk = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
-        self.wv = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
-        self.wo = nn.Linear(args.n_heads * self.head_dim, args.dim, bias=False)
-        self.attn_dropout = nn.Dropout(args.dropout)
-        self.resid_dropout = nn.Dropout(args.dropout)
+        self.wq = Pattention(args.dim, args.n_heads * self.head_dim, args.num_initial_pattention_params, 'l2_norm_gelu')
+        self.wk = Pattention(args.dim, self.n_kv_heads * self.head_dim, args.num_initial_pattention_params, 'l2_norm_gelu')
+        self.wv = Pattention(args.dim, self.n_kv_heads * self.head_dim, args.num_initial_pattention_params, 'l2_norm_gelu')
+        self.wo = Pattention(args.n_heads * self.head_dim, args.dim, args.num_initial_pattention_params, 'l2_norm_gelu')
         self.dropout = args.dropout
 
         # use flash attention or a manual implementation?
@@ -152,7 +202,7 @@ class Attention(nn.Module):
             assert hasattr(self, 'mask')
             scores = scores + self.mask[:, :, :seqlen, :seqlen]   # (bs, n_local_heads, seqlen, cache_len + seqlen)
             scores = F.softmax(scores.float(), dim=-1).type_as(xq)
-            scores = self.attn_dropout(scores)
+            #scores = self.attn_dropout(scores)
             output = torch.matmul(scores, xv)  # (bs, n_local_heads, seqlen, head_dim)
 
         # restore time as batch dimension and concat heads
@@ -160,24 +210,21 @@ class Attention(nn.Module):
 
         # final projection into the residual stream
         output = self.wo(output)
-        output = self.resid_dropout(output)
+        #output = self.resid_dropout(output)
         return output
 
 
 class FeedForward(nn.Module):
-    def __init__(self, dim: int, hidden_dim: int, multiple_of: int, dropout: float):
+    def __init__(self, dim: int, hidden_dim: int, multiple_of: int, dropout: float, args: ModelArgs):
         super().__init__()
         if hidden_dim is None:
             hidden_dim = 4 * dim
             hidden_dim = int(2 * hidden_dim / 3)
             hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
-        self.w1 = nn.Linear(dim, hidden_dim, bias=False)
-        self.w2 = nn.Linear(hidden_dim, dim, bias=False)
-        self.w3 = nn.Linear(dim, hidden_dim, bias=False)
-        self.dropout = nn.Dropout(dropout)
+        self.ffn = Pattention(dim, dim, args.num_initial_pattention_params, 'l2_norm_gelu')
 
     def forward(self, x):
-        return self.dropout(self.w2(F.silu(self.w1(x)) * self.w3(x)))
+        return self.ffn(x)
 
 
 class TransformerBlock(nn.Module):
@@ -192,6 +239,7 @@ class TransformerBlock(nn.Module):
             hidden_dim=args.hidden_dim,
             multiple_of=args.multiple_of,
             dropout=args.dropout,
+            args=args,
         )
         self.layer_id = layer_id
         self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
