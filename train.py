@@ -332,16 +332,20 @@ while True:
 
     # Grow parameters every 30 steps if below max size
     GROW_EVERY_N_STEPS = 30
-    GROW_PARAMS_BY = 32
+    GROW_PARAMS_BY = 64
+    MAX_PARAMS = 512
     if iter_num > 0 and iter_num % GROW_EVERY_N_STEPS == 0:
-        raw_model = model.module if ddp else model
         current_params = raw_model.layers[0].attention.wq.key_param_tokens.shape[0]
-        if current_params < 1024:
+        if current_params < MAX_PARAMS:
             # Store old optimizer state
             old_state = optimizer.state_dict()
 
             # Grow parameters
-            grow_pattention_layers(model, GROW_PARAMS_BY)
+            grow_pattention_layers(unoptimized_model, GROW_PARAMS_BY)
+
+            # After growing the model, compile it
+            model = torch.compile(unoptimized_model)
+            raw_model = model.module if ddp else model
 
             # Create new optimizer but load previous state
             optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
