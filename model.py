@@ -71,13 +71,13 @@ class Pattention(nn.Module):
         self.normalization_type = normalization_type
         # Initialize parameters as nn.Parameter for proper tracking
         self.key_param_tokens = nn.Parameter(torch.empty(token_num, input_channels).uniform_(-0.02, 0.02))
-        self.value_param_tokens = nn.Parameter(torch.empty(token_num, output_channels).uniform_(-0.02, 0.02))
+        self.value_param_tokens = nn.Parameter(torch.empty(token_num, output_channels).uniform_(-0.00001, 0.00001))
 
     def grow_parameters(self, num_to_add):
         # Create new parameters with uniform initialization on the same device as existing parameters
         device = self.key_param_tokens.device
         new_keys = torch.empty(num_to_add, self.input_channels, device=device).uniform_(-0.02, 0.02)
-        new_values = torch.empty(num_to_add, self.output_channels, device=device).uniform_(-0.02, 0.02)
+        new_values = torch.empty(num_to_add, self.output_channels, device=device).uniform_(-0.00001, 0.00001)
 
         # Concatenate and create new nn.Parameters
         self.key_param_tokens = nn.Parameter(torch.cat([self.key_param_tokens, new_keys], dim=0))
