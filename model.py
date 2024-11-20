@@ -63,7 +63,7 @@ def nonlinear_normalization(inputs, normalization_type, dim=-1):
     return outputs
 
 
-def subtractive_attention(inputs, keys):
+def subtractive_attention_orig(inputs, keys):
     # inputs shape: (batch, seqlen, channels)
     # keys shape: (num_tokens, channels)
 
@@ -85,6 +85,28 @@ def subtractive_attention(inputs, keys):
 
     # Sum across the channel dimension and scale by 1/sqrt(channels)
     #similarities = similarities.sum(dim=-1) / math.sqrt(inputs.shape[-1])  # (batch, num_tokens)
+
+    return similarities
+
+
+def subtractive_attention(inputs, keys):
+    # inputs shape: (batch, seqlen, channels)
+    # keys shape: (num_tokens, channels)
+
+    # Calculate similarities one batch and sequence element at a time
+    batch_size, seq_len = inputs.shape[:2]
+    num_tokens = keys.shape[0]
+
+    # Pre-allocate output tensor
+    similarities = torch.empty(batch_size, seq_len, num_tokens, device=inputs.device)
+
+    # Process one element at a time to save memory
+    for b in range(batch_size):
+        for s in range(seq_len):
+            # Compute difference without broadcasting
+            diff = inputs[b, s, None, :] - keys  # (num_tokens, channels)
+            # Compute similarity and sum across channels
+            similarities[b, s] = (1 - diff.abs()).sum(dim=-1)
 
     return similarities
 
