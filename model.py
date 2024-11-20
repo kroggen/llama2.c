@@ -22,7 +22,7 @@ class ModelArgs:
     norm_eps: float = 1e-5
     max_seq_len: int = 2048
     dropout: float = 0.0
-    num_initial_pattention_params: int = 128
+    num_initial_pattention_params: int = 288
 
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float):
@@ -58,6 +58,15 @@ def nonlinear_normalization(inputs, normalization_type, dim=-1):
         norm = (inputs ** 2).sum(dim=dim, keepdim=True).sqrt()
         norm_outputs = inputs / norm * math.sqrt(inputs.shape[dim])
         outputs = F.gelu(norm_outputs)
+    elif normalization_type == 'soft_threshold':
+        # Compute adaptive threshold
+        threshold = inputs.mean(dim=dim, keepdim=True) # + inputs.std(dim=dim, keepdim=True)
+        #threshold = inputs.median(dim=dim, keepdim=True)[0]  -- not implemented for bfloat16
+        # Apply soft thresholding using sigmoid with temperature
+        temperature = math.sqrt(inputs.shape[dim])  # Controls how sharp the threshold is
+        soft_mask = torch.sigmoid(temperature * (inputs - threshold))
+        # Apply soft mask and return
+        outputs = inputs * soft_mask
     else:
         raise NotImplementedError
     return outputs
@@ -153,10 +162,10 @@ class Attention(nn.Module):
         self.n_local_kv_heads = self.n_kv_heads // model_parallel_size
         self.n_rep = self.n_local_heads // self.n_local_kv_heads
         self.head_dim = args.dim // args.n_heads
-        self.wq = Pattention(args.dim, args.n_heads * self.head_dim, args.num_initial_pattention_params, 'l2_norm_gelu')
-        self.wk = Pattention(args.dim, self.n_kv_heads * self.head_dim, args.num_initial_pattention_params, 'l2_norm_gelu')
-        self.wv = Pattention(args.dim, self.n_kv_heads * self.head_dim, args.num_initial_pattention_params, 'l2_norm_gelu')
-        self.wo = Pattention(args.n_heads * self.head_dim, args.dim, args.num_initial_pattention_params, 'l2_norm_gelu')
+        self.wq = Pattention(args.dim, args.n_heads * self.head_dim, args.num_initial_pattention_params, 'soft_threshold')
+        self.wk = Pattention(args.dim, self.n_kv_heads * self.head_dim, args.num_initial_pattention_params, 'soft_threshold')
+        self.wv = Pattention(args.dim, self.n_kv_heads * self.head_dim, args.num_initial_pattention_params, 'soft_threshold')
+        self.wo = Pattention(args.n_heads * self.head_dim, args.dim, args.num_initial_pattention_params, 'soft_threshold')
         self.dropout = args.dropout
 
         # use flash attention or a manual implementation?
@@ -221,7 +230,7 @@ class FeedForward(nn.Module):
             hidden_dim = 4 * dim
             hidden_dim = int(2 * hidden_dim / 3)
             hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
-        self.ffn = Pattention(dim, dim, args.num_initial_pattention_params, 'l2_norm_gelu')
+        self.ffn = Pattention(dim, dim, args.num_initial_pattention_params * 4, 'soft_threshold')
 
     def forward(self, x):
         return self.ffn(x)

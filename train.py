@@ -333,7 +333,7 @@ while True:
     # Grow parameters every 30 steps if below max size
     GROW_EVERY_N_STEPS = 30
     GROW_PARAMS_BY = 64
-    MAX_PARAMS = 512
+    MAX_PARAMS = 256
     if iter_num > 0 and iter_num % GROW_EVERY_N_STEPS == 0:
         current_params = raw_model.layers[0].attention.wq.key_param_tokens.shape[0]
         if current_params < MAX_PARAMS:
