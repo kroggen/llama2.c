@@ -9,6 +9,9 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from subtractive_attention import subtractive_attention_custom
+
+
 @dataclass
 class ModelArgs:
     # default hyperparameters for the Llama 7B model
@@ -133,7 +136,7 @@ class Pattention(nn.Module):
 
     def forward(self, inputs):
         #attn_weights = inputs @ self.key_param_tokens.t()
-        attn_weights = subtractive_attention(inputs, self.key_param_tokens)
+        attn_weights = subtractive_attention_custom(inputs, self.key_param_tokens)
         attn_weights = nonlinear_normalization(attn_weights, self.normalization_type)
         output = attn_weights @ self.value_param_tokens
         return output
