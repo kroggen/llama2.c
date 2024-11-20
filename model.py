@@ -22,7 +22,7 @@ class ModelArgs:
     norm_eps: float = 1e-5
     max_seq_len: int = 2048
     dropout: float = 0.0
-    num_initial_pattention_params: int = 128
+    num_initial_pattention_params: int = 512
 
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float):
@@ -63,6 +63,32 @@ def nonlinear_normalization(inputs, normalization_type, dim=-1):
     return outputs
 
 
+def subtractive_attention(inputs, keys):
+    # inputs shape: (batch, seqlen, channels)
+    # keys shape: (num_tokens, channels)
+
+    # Expand dimensions for broadcasting
+    keys_expanded = keys.unsqueeze(0).unsqueeze(0)  # (1, 1, num_tokens, channels)
+    inputs_expanded = inputs.unsqueeze(2)  # (batch, seqlen, 1, channels)
+
+    # Compute element-wise difference (1 value for each dimension)
+    diff = (inputs_expanded - keys_expanded).contiguous()
+
+    # Compute element-wise similarity (1 value for each dimension)
+    similarities = 1 - diff.abs()
+
+    # Average across the channel dimension to get one similarity score per token
+    #similarities = similarities.mean(dim=-1)  # (batch, num_tokens)
+
+    # Sum across the channel dimension
+    similarities = similarities.sum(dim=-1)  # (batch, num_tokens)
+
+    # Sum across the channel dimension and scale by 1/sqrt(channels)
+    #similarities = similarities.sum(dim=-1) / math.sqrt(inputs.shape[-1])  # (batch, num_tokens)
+
+    return similarities
+
+
 class Pattention(nn.Module):
     def __init__(self, input_channels, output_channels, token_num, normalization_type):
         super().__init__()
@@ -84,7 +110,8 @@ class Pattention(nn.Module):
         self.value_param_tokens = nn.Parameter(torch.cat([self.value_param_tokens, new_values], dim=0))
 
     def forward(self, inputs):
-        attn_weights = inputs @ self.key_param_tokens.t()
+        #attn_weights = inputs @ self.key_param_tokens.t()
+        attn_weights = subtractive_attention(inputs, self.key_param_tokens)
         attn_weights = nonlinear_normalization(attn_weights, self.normalization_type)
         output = attn_weights @ self.value_param_tokens
         return output
