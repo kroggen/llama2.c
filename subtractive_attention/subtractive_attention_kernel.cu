@@ -18,14 +18,11 @@ __global__ void subtractive_attention_kernel(
     int s = blockIdx.y;
     int t = threadIdx.x;
 
-    int inputs_base = b * seq_len * channels + s * channels;
-    int keys_base = t * channels;
-
     if (b < batch_size && s < seq_len && t < num_tokens) {
         float sum = 0.0f;
         for (int c = 0; c < channels; ++c) {
-            float diff = inputs[inputs_base + c] - keys[keys_base + c];
-            sum += (1.0f - fabsf(diff));
+            float diff = inputs[b * seq_len * channels + s * channels + c] - keys[t * channels + c];
+            sum += 1.0f - fabsf(diff);
         }
         similarities[b * seq_len * num_tokens + s * num_tokens + t] = sum;
     }
