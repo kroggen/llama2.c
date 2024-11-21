@@ -9,7 +9,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from subtractive_attention import subtractive_attention_custom
+from subtractive_attention import subtractive_attention
 
 
 @dataclass
@@ -92,7 +92,7 @@ def subtractive_attention_orig(inputs, keys):
     return similarities
 
 
-def subtractive_attention(inputs, keys):
+def subtractive_attention_loop(inputs, keys):
     # inputs shape: (batch, seqlen, channels)
     # keys shape: (num_tokens, channels)
 
@@ -135,8 +135,7 @@ class Pattention(nn.Module):
         self.value_param_tokens = nn.Parameter(torch.cat([self.value_param_tokens, new_values], dim=0))
 
     def forward(self, inputs):
-        #attn_weights = inputs @ self.key_param_tokens.t()
-        attn_weights = subtractive_attention_custom(inputs, self.key_param_tokens)
+        attn_weights = subtractive_attention(inputs, self.key_param_tokens)
         attn_weights = nonlinear_normalization(attn_weights, self.normalization_type)
         output = attn_weights @ self.value_param_tokens
         return output
