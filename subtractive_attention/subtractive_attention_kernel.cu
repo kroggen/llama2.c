@@ -16,7 +16,7 @@ __global__ void subtractive_attention_kernel(
 ) {
     int b = blockIdx.x;
     int s = blockIdx.y;
-    int t = threadIdx.x;
+    int t = blockIdx.z * blockDim.x + threadIdx.x;
 
     if (b < batch_size && s < seq_len && t < num_tokens) {
         float sum = 0.0f;
@@ -39,8 +39,14 @@ void subtractive_attention_cuda(
     const int num_tokens = keys.size(0);
     const int channels = inputs.size(2);
 
-    dim3 blocks(batch_size, seq_len);
-    int threads = 256; // Adjust based on num_tokens
+    // Maximum threads per block (1024 for modern GPUs)
+    const int max_threads = 1024;
+
+    // Calculate threads and blocks for token dimension
+    const int threads = min(num_tokens, max_threads);
+    const int token_blocks = (num_tokens + threads - 1) / threads;
+
+    dim3 blocks(batch_size, seq_len, token_blocks);
 
     subtractive_attention_kernel<<<blocks, threads>>>(
         inputs.data_ptr<float>(),
