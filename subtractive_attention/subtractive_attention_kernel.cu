@@ -41,9 +41,13 @@ void subtractive_attention_cuda(
 
     // Maximum threads per block (1024 for modern GPUs)
     const int max_threads = 1024;
+    const int WARP_SIZE = 32;
+
+    // Round up num_threads to nearest multiple of WARP_SIZE
+    const int rounded_threads = ((num_tokens + WARP_SIZE - 1) / WARP_SIZE) * WARP_SIZE;
 
     // Calculate threads and blocks for token dimension
-    const int threads = min(num_tokens, max_threads);
+    const int threads = min(rounded_threads, max_threads);
     const int token_blocks = (num_tokens + threads - 1) / threads;
 
     dim3 blocks(batch_size, seq_len, token_blocks);
