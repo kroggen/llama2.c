@@ -23,6 +23,9 @@ from contextlib import nullcontext
 from datetime import datetime
 from functools import partial
 
+# before any torch imports
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
 import torch
 from model import Transformer, ModelArgs
 from torch.distributed import destroy_process_group, init_process_group
